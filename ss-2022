@@ -5,7 +5,7 @@ set -e
 # 作者: jinqians
 # 日期: 2025年3月
 # 网站：jinqians.com
-# 描述: Shadowsocks Rust 管理脚本
+# 描述: Shadowsocks Rust 管理脚本（已改：只获取公网IP；公网获取失败可手动输入公网IP/域名生成链接/二维码）
 # =========================================
 
 # 版本信息
@@ -52,6 +52,11 @@ SS_METHOD=""
 SS_TFO=""
 SS_DNS=""
 
+Green_font_prefix="\033[32m" && Red_font_prefix="\033[31m" && Green_background_prefix="\033[42;37m" && Red_background_prefix="\033[41;37m" && Font_color_suffix="\033[0m" && Yellow_font_prefix="\033[0;33m"
+Info="${Green_font_prefix}[信息]${Font_color_suffix}"
+Error="${Red_font_prefix}[错误]${Font_color_suffix}"
+Tip="${Yellow_font_prefix}[注意]${Font_color_suffix}"
+
 # 错误处理函数
 error_exit() {
     echo -e "${ERROR} $1" >&2
@@ -94,22 +99,14 @@ detect_arch() {
     case "${os}" in
         "Darwin")
             case "${arch}" in
-                "arm64")
-                    OS_ARCH="aarch64-apple-darwin"
-                    ;;
-                "x86_64")
-                    OS_ARCH="x86_64-apple-darwin"
-                    ;;
+                "arm64")  OS_ARCH="aarch64-apple-darwin" ;;
+                "x86_64") OS_ARCH="x86_64-apple-darwin" ;;
             esac
             ;;
         "Linux")
             case "${arch}" in
-                "x86_64")
-                    OS_ARCH="x86_64-unknown-linux-gnu"
-                    ;;
-                "aarch64")
-                    OS_ARCH="aarch64-unknown-linux-gnu"
-                    ;;
+                "x86_64") OS_ARCH="x86_64-unknown-linux-gnu" ;;
+                "aarch64") OS_ARCH="aarch64-unknown-linux-gnu" ;;
                 "armv7l"|"armv7")
                     if grep -q "gnueabihf" /proc/cpuinfo; then
                         OS_ARCH="armv7-unknown-linux-gnueabihf"
@@ -117,20 +114,12 @@ detect_arch() {
                         OS_ARCH="arm-unknown-linux-gnueabi"
                     fi
                     ;;
-                "armv6l")
-                    OS_ARCH="arm-unknown-linux-gnueabi"
-                    ;;
-                "i686"|"i386")
-                    OS_ARCH="i686-unknown-linux-musl"
-                    ;;
-                *)
-                    error_exit "不支持的CPU架构: ${arch}"
-                    ;;
+                "armv6l") OS_ARCH="arm-unknown-linux-gnueabi" ;;
+                "i686"|"i386") OS_ARCH="i686-unknown-linux-musl" ;;
+                *) error_exit "不支持的CPU架构: ${arch}" ;;
             esac
             ;;
-        *)
-            error_exit "不支持的操作系统: ${os}"
-            ;;
+        *) error_exit "不支持的操作系统: ${os}" ;;
     esac
 
     echo -e "${INFO} 检测到系统架构为 [ ${OS_ARCH} ]"
@@ -142,30 +131,6 @@ check_installation() {
         error_exit "Shadowsocks Rust 未安装，请先安装！"
     fi
 }
-
-# 检查服务状态
-check_service_status() {
-    local status=$(systemctl is-active ss-rust)
-    echo "${status}"
-}
-
-# 获取最新版本
-get_latest_version() {
-    SS_VERSION=$(wget -qO- https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases | \
-                 jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | .tag_name] | .[0]')
-
-    if [[ -z ${SS_VERSION} ]]; then
-        error_exit "获取 Shadowsocks Rust 最新版本失败！"
-    fi
-
-    SS_VERSION=${SS_VERSION#v}
-    echo -e "${INFO} 检测到 Shadowsocks Rust 最新版本为 [ ${SS_VERSION} ]"
-}
-
-Green_font_prefix="\033[32m" && Red_font_prefix="\033[31m" && Green_background_prefix="\033[42;37m" && Red_background_prefix="\033[41;37m" && Font_color_suffix="\033[0m" && Yellow_font_prefix="\033[0;33m"
-Info="${Green_font_prefix}[信息]${Font_color_suffix}"
-Error="${Red_font_prefix}[错误]${Font_color_suffix}"
-Tip="${Yellow_font_prefix}[注意]${Font_color_suffix}"
 
 check_installed_status() {
     if [[ ! -e ${BINARY_PATH} ]]; then
@@ -183,28 +148,24 @@ check_status() {
     fi
 }
 
-check_new_ver() {
-    new_ver=$(wget -qO- https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases| jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | .tag_name] | .[0]')
-    [[ -z ${new_ver} ]] && echo -e "${Error} Shadowsocks Rust 最新版本获取失败！" && exit 1
-    echo -e "${Info} 检测到 Shadowsocks Rust 最新版本为 [ ${new_ver} ]"
+# 获取最新版本
+get_latest_version() {
+    SS_VERSION=$(wget -qO- https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases | \
+                 jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | .tag_name] | .[0]')
+
+    if [[ -z ${SS_VERSION} ]]; then
+        error_exit "获取 Shadowsocks Rust 最新版本失败！"
+    fi
+
+    SS_VERSION=${SS_VERSION#v}
+    echo -e "${INFO} 检测到 Shadowsocks Rust 最新版本为 [ ${SS_VERSION} ]"
 }
 
-# 检查版本并比较
-check_ver_comparison() {
-    if [[ ! -f "${VERSION_FILE}" ]]; then
-        echo -e "${Info} 未找到版本文件，可能是首次安装"
-        return 0
-    fi
-
-    local now_ver=$(cat ${VERSION_FILE})
-    if [[ "${now_ver}" != "${new_ver}" ]]; then
-        echo -e "${Info} 发现 Shadowsocks Rust 新版本 [ ${new_ver} ]"
-        echo -e "${Info} 当前版本 [ ${now_ver} ]"
-        return 0
-    else
-        echo -e "${Info} 当前已是最新版本 [ ${new_ver} ]"
-        return 1
-    fi
+check_new_ver() {
+    new_ver=$(wget -qO- https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases | \
+        jq -r '[.[] | select(.prerelease == false) | select(.draft == false) | .tag_name] | .[0]')
+    [[ -z ${new_ver} ]] && echo -e "${Error} Shadowsocks Rust 最新版本获取失败！" && exit 1
+    echo -e "${Info} 检测到 Shadowsocks Rust 最新版本为 [ ${new_ver} ]"
 }
 
 # 获取当前安装版本
@@ -244,7 +205,6 @@ version_compare() {
             return 1
         fi
     done
-
     return 1
 }
 
@@ -256,30 +216,14 @@ download_ss() {
     local filename=""
 
     case "${arch}" in
-        "aarch64-apple-darwin"|"x86_64-apple-darwin")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "x86_64-unknown-linux-gnu"|"x86_64-unknown-linux-musl")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "aarch64-unknown-linux-gnu"|"aarch64-unknown-linux-musl")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "arm-unknown-linux-gnueabi"|"arm-unknown-linux-gnueabihf"|"arm-unknown-linux-musleabi"|"arm-unknown-linux-musleabihf")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "armv7-unknown-linux-gnueabihf"|"armv7-unknown-linux-musleabihf")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "i686-unknown-linux-musl")
-            filename="shadowsocks-v${version}.${arch}.tar.xz"
-            ;;
-        "x86_64-pc-windows-gnu"|"x86_64-pc-windows-msvc")
-            filename="shadowsocks-v${version}.${arch}.zip"
-            ;;
-        *)
-            error_exit "不支持的系统架构: ${arch}"
-            ;;
+        "aarch64-apple-darwin"|"x86_64-apple-darwin") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "x86_64-unknown-linux-gnu"|"x86_64-unknown-linux-musl") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "aarch64-unknown-linux-gnu"|"aarch64-unknown-linux-musl") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "arm-unknown-linux-gnueabi"|"arm-unknown-linux-gnueabihf"|"arm-unknown-linux-musleabi"|"arm-unknown-linux-musleabihf") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "armv7-unknown-linux-gnueabihf"|"armv7-unknown-linux-musleabihf") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "i686-unknown-linux-musl") filename="shadowsocks-v${version}.${arch}.tar.xz" ;;
+        "x86_64-pc-windows-gnu"|"x86_64-pc-windows-msvc") filename="shadowsocks-v${version}.${arch}.zip" ;;
+        *) error_exit "不支持的系统架构: ${arch}" ;;
     esac
 
     echo -e "${INFO} 开始下载 Shadowsocks Rust ${version}..."
@@ -316,6 +260,7 @@ download() {
     download_ss "${version}" "${arch}"
 }
 
+# 安装系统服务
 install_service() {
     echo -e "${INFO} 开始安装系统服务..."
     cat > /etc/systemd/system/ss-rust.service << EOF
@@ -345,6 +290,7 @@ EOF
     echo -e "${SUCCESS} Shadowsocks Rust 服务配置完成！"
 }
 
+# 安装依赖
 install_dependencies() {
     echo -e "${INFO} 开始安装系统依赖..."
 
@@ -367,6 +313,7 @@ install_dependencies() {
     echo -e "${SUCCESS} 系统依赖安装完成！"
 }
 
+# 写入配置文件
 write_config() {
     cat > ${CONFIG_PATH} << EOF
 {
@@ -383,6 +330,7 @@ EOF
     echo -e "${SUCCESS} 配置文件写入完成！"
 }
 
+# 读取配置文件
 read_config() {
     if [[ ! -e ${CONFIG_PATH} ]]; then
         error_exit "Shadowsocks Rust 配置文件不存在！"
@@ -395,6 +343,7 @@ read_config() {
     SS_DNS=$(jq -r '.nameserver // empty' ${CONFIG_PATH})
 }
 
+# 检查防火墙并开放端口
 check_firewall() {
     local port=$1
     echo -e "${INFO} 检查防火墙配置..."
@@ -424,12 +373,14 @@ check_firewall() {
     fi
 }
 
+# 生成随机端口
 generate_random_port() {
     local min_port=10000
     local max_port=65535
     echo $(shuf -i ${min_port}-${max_port} -n 1)
 }
 
+# 设置端口
 set_port() {
     SS_PORT=$(generate_random_port)
     echo -e "${INFO} 已生成随机端口：${SS_PORT}"
@@ -468,6 +419,7 @@ set_port() {
     echo
 }
 
+# 设置加密方式
 set_method() {
     echo -e "请选择 Shadowsocks Rust 加密方式
 ==================================
@@ -520,6 +472,7 @@ set_method() {
     echo "==================================" && echo
 }
 
+# 设置密码
 set_password() {
     echo "请输入 Shadowsocks Rust 密码 [0-9][a-z][A-Z]"
     read -e -p "(默认：随机生成 Base64)：" SS_PASSWORD
@@ -558,6 +511,7 @@ set_password() {
     echo "==================================" && echo
 }
 
+# 设置 TFO
 set_tfo() {
     echo -e "是否启用 TFO ？
 ==================================
@@ -578,6 +532,7 @@ set_tfo() {
     echo "==================================" && echo
 }
 
+# 设置 DNS
 set_dns() {
     echo -e "请选择 DNS 配置方式：
 ==================================
@@ -602,6 +557,7 @@ set_dns() {
     fi
 }
 
+# 修改配置
 modify_config() {
     check_installation
     echo && echo -e "你要做什么？
@@ -627,6 +583,7 @@ modify_config() {
     esac
 }
 
+# 安装
 Install() {
     [[ -e ${BINARY_PATH} ]] && echo -e "${Error} 检测到 Shadowsocks Rust 已安装！" && exit 1
 
@@ -679,6 +636,7 @@ Install() {
     fi
 }
 
+# 启动服务
 start_service() {
     check_installed_status || return 1
 
@@ -704,6 +662,7 @@ start_service() {
     echo -e "${SUCCESS} Shadowsocks Rust 启动成功！"
 }
 
+# 停止
 Stop() {
     check_installed_status || return 1
     check_status
@@ -715,12 +674,14 @@ Stop() {
     echo -e "${Info} Shadowsocks Rust 已停止！"
 }
 
+# 重启
 Restart() {
     check_installed_status || return 1
     systemctl restart ss-rust
     echo -e "${Info} Shadowsocks Rust 重启完毕！"
 }
 
+# 更新
 Update() {
     check_installed_status
 
@@ -751,6 +712,7 @@ Update() {
     Start_Menu
 }
 
+# 卸载
 Uninstall() {
     check_installed_status || return 1
     echo "确定要卸载 Shadowsocks Rust ? (y/N)"
@@ -773,9 +735,7 @@ Uninstall() {
 
 # ========= 公网IP获取（严格校验 + 多源回退，不回落内网） =========
 
-trim_space() {
-    echo -n "$1" | tr -d '\r\n' | awk '{$1=$1;print}'
-}
+trim_space() { echo -n "$1" | tr -d '\r\n' | awk '{$1=$1;print}'; }
 
 is_valid_ipv4() {
     local ip="$1"
@@ -856,79 +816,129 @@ getipv6() {
     set -e
 }
 
-urlsafe_base64() {
-    date=$(echo -n "$1"|base64|sed ':a;N;s/\n/ /g;ta'|sed 's/ //g;s/=//g;s/+/-/g;s/\//_/g')
-    echo -e "${date}"
-}
-
-# 生成链接和二维码（IPv6 用 []）
-Link_QR() {
-    if [[ "${ipv4}" != "IPv4_Error" ]]; then
-        SSbase64=$(urlsafe_base64 "${SS_METHOD}:${SS_PASSWORD}@${ipv4}:${SS_PORT}")
-        SSurl="ss://${SSbase64}"
-        link_ipv4=" 链接  [IPv4]：${Green_font_prefix}${SSurl}${Font_color_suffix}"
-        echo -e "\n IPv4 二维码:"
-        echo "${SSurl}" | qrencode -t utf8
-    fi
-    if [[ "${ipv6}" != "IPv6_Error" ]]; then
-        SSbase64=$(urlsafe_base64 "${SS_METHOD}:${SS_PASSWORD}@[${ipv6}]:${SS_PORT}")
-        SSurl="ss://${SSbase64}"
-        link_ipv6=" 链接  [IPv6]：${Green_font_prefix}${SSurl}${Font_color_suffix}"
-        echo -e "\n IPv6 二维码:"
-        echo "${SSurl}" | qrencode -t utf8
-    fi
-}
-
-# 查看配置信息：
-# - 只获取公网IP（不回落内网）
-# - 如果公网IP获取失败：仅输出SS配置，直接返回（不输出链接/二维码/Surge/ShadowTLS）
-# - IPv6 ss:// URL 全部用 []；标签名净化
+# 查看配置信息（关键改动在这里）
+# 1) 永远输出 SS 配置（只要 config.json 存在）
+# 2) 只获取公网 IPv4/IPv6（不回落内网）
+# 3) 若公网IP都获取失败：允许手动输入“公网IP/域名”来生成链接/二维码（留空则只显示配置并返回）
+# 4) IPv6 在 ss:// URL 中统一用 []；标签名净化
 View() {
-    check_installed_status
-    getipv4
-    getipv6
+    check_installed_status || return 1
 
-    if [[ -f "${CONFIG_PATH}" ]]; then
-        local config_port=$(jq -r '.server_port' "${CONFIG_PATH}")
-        local config_password=$(jq -r '.password' "${CONFIG_PATH}")
-        local config_method=$(jq -r '.method' "${CONFIG_PATH}")
-        local config_tfo=$(jq -r '.fast_open' "${CONFIG_PATH}")
-        local config_dns=$(jq -r '.nameserver // empty' "${CONFIG_PATH}")
-
-        SS_PORT="$config_port"
-        SS_PASSWORD="$config_password"
-        SS_METHOD="$config_method"
-        SS_TFO="$config_tfo"
-        SS_DNS="$config_dns"
-
-        echo -e "Shadowsocks Rust 配置："
-        echo -e "——————————————————————————————————"
-        # 只显示拿到的公网IP；拿不到就不显示
-        [[ "${ipv4}" != "IPv4_Error" ]] && echo -e " 地址：${Green_font_prefix}${ipv4}${Font_color_suffix}"
-        [[ "${ipv6}" != "IPv6_Error" ]] && echo -e " 地址：${Green_font_prefix}${ipv6}${Font_color_suffix}"
-        echo -e " 端口：${Green_font_prefix}${config_port}${Font_color_suffix}"
-        echo -e " 密码：${Green_font_prefix}${config_password}${Font_color_suffix}"
-        echo -e " 加密：${Green_font_prefix}${config_method}${Font_color_suffix}"
-        echo -e " TFO ：${Green_font_prefix}${config_tfo}${Font_color_suffix}"
-        [[ -n "${config_dns}" ]] && echo -e " DNS ：${Green_font_prefix}${config_dns}${Font_color_suffix}"
-        echo -e "——————————————————————————————————"
-    else
-        echo -e "${Error} 配置文件不存在！"
+    # 防止 jq 缺失导致直接看不到配置
+    if ! command -v jq >/dev/null 2>&1; then
+        echo -e "${Error} 未安装 jq，无法读取配置文件（${CONFIG_PATH}）"
+        echo -e "${Info} Debian/Ubuntu: apt-get install -y jq"
+        echo -e "${Info} CentOS: yum install -y jq"
         return 1
     fi
 
-    # 公网IP拿不到：这里直接返回，不输出“链接/二维码/Surge/ShadowTLS”
+    # 读取配置（先读配置再查公网，确保“配置一定输出”）
+    if [[ ! -f "${CONFIG_PATH}" ]]; then
+        echo -e "${Error} 配置文件不存在：${CONFIG_PATH}"
+        return 1
+    fi
+
+    local config_port config_password config_method config_tfo config_dns
+    config_port=$(jq -r '.server_port' "${CONFIG_PATH}")
+    config_password=$(jq -r '.password' "${CONFIG_PATH}")
+    config_method=$(jq -r '.method' "${CONFIG_PATH}")
+    config_tfo=$(jq -r '.fast_open' "${CONFIG_PATH}")
+    config_dns=$(jq -r '.nameserver // empty' "${CONFIG_PATH}")
+
+    SS_PORT="$config_port"
+    SS_PASSWORD="$config_password"
+    SS_METHOD="$config_method"
+    SS_TFO="$config_tfo"
+    SS_DNS="$config_dns"
+
+    # 获取公网IP
+    getipv4
+    getipv6
+
+    echo -e "Shadowsocks Rust 配置："
+    echo -e "——————————————————————————————————"
+    [[ "${ipv4}" != "IPv4_Error" ]] && echo -e " 地址：${Green_font_prefix}${ipv4}${Font_color_suffix}"
+    [[ "${ipv6}" != "IPv6_Error" ]] && echo -e " 地址：${Green_font_prefix}${ipv6}${Font_color_suffix}"
+    echo -e " 端口：${Green_font_prefix}${config_port}${Font_color_suffix}"
+    echo -e " 密码：${Green_font_prefix}${config_password}${Font_color_suffix}"
+    echo -e " 加密：${Green_font_prefix}${config_method}${Font_color_suffix}"
+    echo -e " TFO ：${Green_font_prefix}${config_tfo}${Font_color_suffix}"
+    [[ -n "${config_dns}" ]] && echo -e " DNS ：${Green_font_prefix}${config_dns}${Font_color_suffix}"
+    echo -e "——————————————————————————————————"
+
+    local userinfo
+    userinfo=$(echo -n "${config_method}:${config_password}" | base64 -w 0)
+
+    # 公网IP都拿不到：允许手动输入公网IP/域名来生成
     if [[ "${ipv4}" == "IPv4_Error" && "${ipv6}" == "IPv6_Error" ]]; then
+        read -e -p "未获取到公网IP，请输入用于客户端连接的【公网IP或域名】(留空则返回主菜单)： " PUBLIC_HOST
+        if [[ -z "${PUBLIC_HOST}" ]]; then
+            echo -e "—————————————————————————"
+            return 0
+        fi
+
+        local PUBLIC_HOST_URL PUBLIC_NAME
+        if [[ "${PUBLIC_HOST}" == *:* ]]; then
+            PUBLIC_HOST_URL="[${PUBLIC_HOST}]"
+        else
+            PUBLIC_HOST_URL="${PUBLIC_HOST}"
+        fi
+        PUBLIC_NAME="$(sanitize_tag "${PUBLIC_HOST}")"
+
+        local ss_url="ss://${userinfo}@${PUBLIC_HOST_URL}:${config_port}#SS-${PUBLIC_NAME}"
+
+        echo -e "\n${Yellow_font_prefix}=== Shadowsocks 链接 ===${Font_color_suffix}"
+        echo -e "${Green_font_prefix}链接：${Font_color_suffix}${ss_url}"
+
+        echo -e "\n${Yellow_font_prefix}=== Shadowsocks 二维码 ===${Font_color_suffix}"
+        if command -v qrencode &> /dev/null; then
+            echo "${ss_url}" | qrencode -t UTF8
+        else
+            echo -e "${Red_font_prefix}未安装 qrencode，无法生成二维码${Font_color_suffix}"
+        fi
+
+        echo -e "\n${Yellow_font_prefix}=== Surge 配置 ===${Font_color_suffix}"
+        echo -e "SS-${PUBLIC_NAME} = ss, ${PUBLIC_HOST}, ${config_port}, encrypt-method=${config_method}, password=${config_password}, tfo=${config_tfo}, udp-relay=true"
+
+        # 手动地址 + ShadowTLS（可选）
+        if [ -f "/etc/systemd/system/shadowtls-ss.service" ]; then
+            local stls_listen_port stls_password stls_sni
+            stls_listen_port=$(grep -oP '(?<=--listen ::0:)\d+' /etc/systemd/system/shadowtls-ss.service)
+            stls_password=$(grep -oP '(?<=--password )\S+' /etc/systemd/system/shadowtls-ss.service)
+            stls_sni=$(grep -oP '(?<=--tls )\S+' /etc/systemd/system/shadowtls-ss.service)
+
+            echo -e "\n${Yellow_font_prefix}=== ShadowTLS 配置 ===${Font_color_suffix}"
+            echo -e " 监听端口：${Green_font_prefix}${stls_listen_port}${Font_color_suffix}"
+            echo -e " 密码：${Green_font_prefix}${stls_password}${Font_color_suffix}"
+            echo -e " SNI：${Green_font_prefix}${stls_sni}${Font_color_suffix}"
+            echo -e " 版本：3"
+
+            local shadow_tls_config shadow_tls_base64 ss_stls_url
+            shadow_tls_config="{\"version\":\"3\",\"password\":\"${stls_password}\",\"host\":\"${stls_sni}\",\"port\":\"${stls_listen_port}\",\"address\":\"${PUBLIC_HOST}\"}"
+            shadow_tls_base64=$(echo -n "${shadow_tls_config}" | base64 -w 0)
+            ss_stls_url="ss://${userinfo}@${PUBLIC_HOST_URL}:${config_port}?shadow-tls=${shadow_tls_base64}#SS-${PUBLIC_NAME}-STLS"
+
+            echo -e "\n${Yellow_font_prefix}=== SS + ShadowTLS 链接 ===${Font_color_suffix}"
+            echo -e "${Green_font_prefix}合并链接：${Font_color_suffix}${ss_stls_url}"
+
+            echo -e "\n${Yellow_font_prefix}=== SS + ShadowTLS 二维码 ===${Font_color_suffix}"
+            if command -v qrencode &> /dev/null; then
+                echo "${ss_stls_url}" | qrencode -t UTF8
+            else
+                echo -e "${Red_font_prefix}未安装 qrencode，无法生成二维码${Font_color_suffix}"
+            fi
+
+            echo -e "\n${Yellow_font_prefix}=== Surge Shadowsocks + ShadowTLS 配置 ===${Font_color_suffix}"
+            echo -e "SS-${PUBLIC_NAME}-STLS = ss, ${PUBLIC_HOST}, ${stls_listen_port}, encrypt-method=${config_method}, password=${config_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
+        fi
+
         echo -e "—————————————————————————"
         return 0
     fi
 
-    local userinfo=$(echo -n "${config_method}:${config_password}" | base64 -w 0)
-    local ss_url_ipv4=""
-    local ss_url_ipv6=""
-
-    local name_v4=""
-    local name_v6=""
+    # ======= 正常：有公网IP（IPv4/IPv6 分别输出） =======
+    local ss_url_ipv4="" ss_url_ipv6=""
+    local name_v4="" name_v6=""
 
     if [[ "${ipv4}" != "IPv4_Error" ]]; then
         name_v4="$(sanitize_tag "${ipv4}")"
@@ -945,30 +955,22 @@ View() {
 
     echo -e "\n${Yellow_font_prefix}=== Shadowsocks 二维码 ===${Font_color_suffix}"
     if command -v qrencode &> /dev/null; then
-        if [[ -n "${ss_url_ipv4}" ]]; then
-            echo -e "${Green_font_prefix}IPv4 二维码：${Font_color_suffix}"
-            echo "${ss_url_ipv4}" | qrencode -t UTF8
-        fi
-        if [[ -n "${ss_url_ipv6}" ]]; then
-            echo -e "${Green_font_prefix}IPv6 二维码：${Font_color_suffix}"
-            echo "${ss_url_ipv6}" | qrencode -t UTF8
-        fi
+        [[ -n "${ss_url_ipv4}" ]] && { echo -e "${Green_font_prefix}IPv4 二维码：${Font_color_suffix}"; echo "${ss_url_ipv4}" | qrencode -t UTF8; }
+        [[ -n "${ss_url_ipv6}" ]] && { echo -e "${Green_font_prefix}IPv6 二维码：${Font_color_suffix}"; echo "${ss_url_ipv6}" | qrencode -t UTF8; }
     else
         echo -e "${Red_font_prefix}未安装 qrencode，无法生成二维码${Font_color_suffix}"
     fi
 
     echo -e "\n${Yellow_font_prefix}=== Surge 配置 ===${Font_color_suffix}"
-    if [[ "${ipv4}" != "IPv4_Error" ]]; then
-        echo -e "SS-${name_v4} = ss, ${ipv4}, ${config_port}, encrypt-method=${config_method}, password=${config_password}, tfo=${config_tfo}, udp-relay=true"
-    fi
-    if [[ "${ipv6}" != "IPv6_Error" ]]; then
-        echo -e "SS-${name_v6} = ss, ${ipv6}, ${config_port}, encrypt-method=${config_method}, password=${config_password}, tfo=${config_tfo}, udp-relay=true"
-    fi
+    [[ -n "${ss_url_ipv4}" ]] && echo -e "SS-${name_v4} = ss, ${ipv4}, ${config_port}, encrypt-method=${config_method}, password=${config_password}, tfo=${config_tfo}, udp-relay=true"
+    [[ -n "${ss_url_ipv6}" ]] && echo -e "SS-${name_v6} = ss, ${ipv6}, ${config_port}, encrypt-method=${config_method}, password=${config_password}, tfo=${config_tfo}, udp-relay=true"
 
+    # ShadowTLS（公网正常情况）
     if [ -f "/etc/systemd/system/shadowtls-ss.service" ]; then
-        local stls_listen_port=$(grep -oP '(?<=--listen ::0:)\d+' /etc/systemd/system/shadowtls-ss.service)
-        local stls_password=$(grep -oP '(?<=--password )\S+' /etc/systemd/system/shadowtls-ss.service)
-        local stls_sni=$(grep -oP '(?<=--tls )\S+' /etc/systemd/system/shadowtls-ss.service)
+        local stls_listen_port stls_password stls_sni
+        stls_listen_port=$(grep -oP '(?<=--listen ::0:)\d+' /etc/systemd/system/shadowtls-ss.service)
+        stls_password=$(grep -oP '(?<=--password )\S+' /etc/systemd/system/shadowtls-ss.service)
+        stls_sni=$(grep -oP '(?<=--tls )\S+' /etc/systemd/system/shadowtls-ss.service)
 
         echo -e "\n${Yellow_font_prefix}=== ShadowTLS 配置 ===${Font_color_suffix}"
         echo -e " 监听端口：${Green_font_prefix}${stls_listen_port}${Font_color_suffix}"
@@ -976,12 +978,9 @@ View() {
         echo -e " SNI：${Green_font_prefix}${stls_sni}${Font_color_suffix}"
         echo -e " 版本：3"
 
-        local shadow_tls_config_v4=""
-        local shadow_tls_config_v6=""
-        local shadow_tls_base64_v4=""
-        local shadow_tls_base64_v6=""
-        local ss_stls_url_v4=""
-        local ss_stls_url_v6=""
+        local shadow_tls_config_v4 shadow_tls_config_v6
+        local shadow_tls_base64_v4 shadow_tls_base64_v6
+        local ss_stls_url_v4="" ss_stls_url_v6=""
 
         if [[ "${ipv4}" != "IPv4_Error" ]]; then
             shadow_tls_config_v4="{\"version\":\"3\",\"password\":\"${stls_password}\",\"host\":\"${stls_sni}\",\"port\":\"${stls_listen_port}\",\"address\":\"${ipv4}\"}"
@@ -1001,31 +1000,22 @@ View() {
 
         echo -e "\n${Yellow_font_prefix}=== SS + ShadowTLS 二维码 ===${Font_color_suffix}"
         if command -v qrencode &> /dev/null; then
-            if [[ -n "${ss_stls_url_v4}" ]]; then
-                echo -e "${Green_font_prefix}IPv4 二维码：${Font_color_suffix}"
-                echo "${ss_stls_url_v4}" | qrencode -t UTF8
-            fi
-            if [[ -n "${ss_stls_url_v6}" ]]; then
-                echo -e "${Green_font_prefix}IPv6 二维码：${Font_color_suffix}"
-                echo "${ss_stls_url_v6}" | qrencode -t UTF8
-            fi
+            [[ -n "${ss_stls_url_v4}" ]] && { echo -e "${Green_font_prefix}IPv4 二维码：${Font_color_suffix}"; echo "${ss_stls_url_v4}" | qrencode -t UTF8; }
+            [[ -n "${ss_stls_url_v6}" ]] && { echo -e "${Green_font_prefix}IPv6 二维码：${Font_color_suffix}"; echo "${ss_stls_url_v6}" | qrencode -t UTF8; }
         else
             echo -e "${Red_font_prefix}未安装 qrencode，无法生成二维码${Font_color_suffix}"
         fi
 
         echo -e "\n${Yellow_font_prefix}=== Surge Shadowsocks + ShadowTLS 配置 ===${Font_color_suffix}"
-        if [[ "${ipv4}" != "IPv4_Error" ]]; then
-            echo -e "SS-${name_v4}-STLS = ss, ${ipv4}, ${stls_listen_port}, encrypt-method=${config_method}, password=${config_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
-        fi
-        if [[ "${ipv6}" != "IPv6_Error" ]]; then
-            echo -e "SS-${name_v6}-STLS = ss, ${ipv6}, ${stls_listen_port}, encrypt-method=${config_method}, password=${config_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
-        fi
+        [[ -n "${ss_stls_url_v4}" ]] && echo -e "SS-${name_v4}-STLS = ss, ${ipv4}, ${stls_listen_port}, encrypt-method=${config_method}, password=${config_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
+        [[ -n "${ss_stls_url_v6}" ]] && echo -e "SS-${name_v6}-STLS = ss, ${ipv6}, ${stls_listen_port}, encrypt-method=${config_method}, password=${config_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
     fi
 
     echo -e "—————————————————————————"
     return 0
 }
 
+# 查看运行状态
 Status() {
     echo -e "${Info} 获取 Shadowsocks Rust 活动日志 ……"
     echo -e "${Tip} 返回主菜单请按 q ！"
@@ -1033,6 +1023,7 @@ Status() {
     Start_Menu
 }
 
+# 更新脚本
 Update_Shell() {
     echo -e "${Info} 当前脚本版本为 [ ${SCRIPT_VERSION} ]"
     echo -e "${Info} 开始检测脚本更新..."
@@ -1082,6 +1073,7 @@ Update_Shell() {
     fi
 }
 
+# 安装 ShadowTLS
 install_shadowtls() {
     echo -e "${Info} 开始下载 ShadowTLS 安装脚本..."
 
@@ -1099,22 +1091,26 @@ install_shadowtls() {
     Before_Start_Menu
 }
 
+# 返回主菜单
 Before_Start_Menu() {
     echo && echo -n -e "${Yellow_font_prefix}* 按回车返回主菜单 *${Font_color_suffix}" && read temp
 }
 
+# 主菜单
 Start_Menu() {
     while true; do
         clear
         check_root
         detect_os
         action=${1:-}
+
         echo -e "${GREEN}============================================${RESET}"
         echo -e "${GREEN}          SS - 2022 管理脚本 ${RESET}"
         echo -e "${GREEN}============================================${RESET}"
         echo -e "${GREEN}            作者: jinqian${RESET}"
         echo -e "${GREEN}       网站：https://jinqians.com${RESET}"
         echo -e "${GREEN}============================================${RESET}"
+
         echo && echo -e "
  ${Green_font_prefix}0.${Font_color_suffix} 更新脚本
 ——————————————————————————————————
@@ -1145,6 +1141,7 @@ Start_Menu() {
         else
             echo -e " 当前状态：${Red_font_prefix}未安装${Font_color_suffix}"
         fi
+
         echo
         read -e -p " 请输入数字 [0-11]：" num
         case "$num" in
@@ -1165,4 +1162,5 @@ Start_Menu() {
     done
 }
 
+# 启动脚本
 Start_Menu "$@"
